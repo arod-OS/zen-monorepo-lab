@@ -1,0 +1,232 @@
+# Zen Monorepo CI Pipeline
+# This pipeline detects which parts of the repo changed and only runs the relevant tests
+
+name: Monorepo CI
+
+on:
+  push:
+    branches: [main]
+  pull_requests:
+    branches: [main]
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: ${{ github.workflow }}-{{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job 1: Detect which parts of the repo changed
+  detect-changes:
+    name: "Detect Changes"
+    runs-on: ubuntu-latest
+    outputs:
+      perception: ${{ steps.filter.outputs.perception }}
+      ml-training: ${{ steps.filter.outputs.ml-training }}
+      data-utils: ${{ steps.filter.outputs.data-utils }}
+      infra: ${{ steps.filter.outputs.infra }}
+      docs-only: ${{ steps.filter.outputs.docs }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect file changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            perception:
+              - 'services/perception/**'
+              - 'libs/data-utils/**'
+            ml-training:
+              - 'services/ml-training/**'
+              - 'libs/data-utils/**'
+            data-utils:
+              - 'libs/data-utils/**'
+            infra:
+              - 'infra/**'
+              - '.github/workflows/**'
+            docs:
+              - 'docs/**'
+
+  # Job 2: Test the shared data-utils library
+  test-data-utils:
+    name: "Test: data-utils"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.data-utils == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-data-utils-${{ hashFiles('libs/data-utils/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-data-utils-
+
+      - name: Install dependencies
+        run: pip install -r libs/data-utils/requirements.txt
+
+      - name: Run tests
+        run: python -m pytest libs/data-utils/tests/ -v --tb=short --junitxml=results/data-utils.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-data-utils
+          path: results/
+          retention-days: 7
+
+  # Job 3: Test the perception service
+  test-perception:
+    name: "Test: perception"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.perception == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-perception-py${{ matrix.python-version }}-${{ hashFiles('services/perception/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-perception-py${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          pip install -r libs/data-utils/requirements.txt
+          pip install -r services/perception/requirements.txt
+
+      - name: Run tests
+        run: python -m pytest services/perception/tests/ -v --tb=short --junitxml=results/perception.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-perception-py${{ matrix.python-version }}
+          path: results/
+          retention-days: 7
+
+  # Job 4: Test the ML training service
+  test-ml-training:
+    name: "Test: ml-training"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.ml-training == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ml-training-${{ hashFiles('services/ml-training/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-ml-training-
+
+      - name: Install dependencies
+        run: |
+          pip install -r libs/data-utils/requirements.txt
+          pip install -r services/ml-training/requirements.txt
+
+      - name: Run tests
+        run: python -m pytest services/ml-training/tests/ -v --tb=short --junitxml=results/ml-training.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-ml-training
+          path: results/
+          retention-days: 7
+
+  # Job 5: Docker build (only if infra or perception code changed)
+  docker-build:
+    name: "Docker: perception"
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.perception == 'true' || needs.detect-changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('infra/docker/Dockerfile.perception') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+      
+      - name: Build perception image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/Dockerfile.perception
+          push: false
+          load: true
+          tags: zendar/perception:pr-${{ github.event.pull_request.number || 'latest' }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      # Prevent cache from growing forever
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+  #  Job 6: CI Summry (always runs, reports overall status)
+  ci-summary:
+    name: "CI Summary"
+    if: always()
+    needs: [detect-changes, test-data-utils, test-perception, test-ml-training, docker-build]
+    runs-on ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          echo "## CI Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| data-utils | ${{ needs.test-data-utils.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| perception | ${{ needs.test-perception.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ml-training | ${{ needs.test-ml-training.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| docker-build | ${{ needs.docker-build.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if any required job failed
+        if: |
+          needs.test-data-utils.result == 'failure' ||
+          needs.test-perception.result == 'failure' ||
+          needs.test-ml-training.result == 'failure' ||
+          needs.docker-build.result == 'failure'
+        run: exit 1
