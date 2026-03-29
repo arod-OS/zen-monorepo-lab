@@ -4,6 +4,7 @@ FROM python:3.11-slim AS Testing
 
 WORKDIR /app
 COPY libs/data-utils /app/libs/data-utils
+COPY services/perception /app/services/perception
 
 RUN pip install --no-cache-dir -r services/perception/requirements.txt
 RUN python -m pytest services/perception/tests/ -v
@@ -12,7 +13,7 @@ RUN python -m pytest services/perception/tests/ -v
 FROM python:3.11-slim AS Production
 
 WORKDIR /app
-COPY --from-test /app/libs/data-utils /app/libs/data-utils
-COPY --from-test /app/services/perception/src /app/services/perception/src
+COPY --from=test /app/libs/data-utils /app/libs/data-utils
+COPY --from=test /app/services/perception/src /app/services/perception/src
 
-CMD ["python", "-m", service.perception.src.detector]
+CMD ["python", "-m", services.perception.src.detector]
