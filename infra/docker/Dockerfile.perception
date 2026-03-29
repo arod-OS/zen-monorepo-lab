@@ -1,6 +1,6 @@
 # Multi-stage build for the perception service
 # Stage 1: Testing
-FROM python:3.11-slim AS testing
+FROM python:3.11-slim AS test
 
 WORKDIR /app
 COPY libs/data-utils /app/libs/data-utils
@@ -16,4 +16,4 @@ WORKDIR /app
 COPY --from=test /app/libs/data-utils /app/libs/data-utils
 COPY --from=test /app/services/perception/src /app/services/perception/src
 
-CMD ["python", "-m", services.perception.src.detector]
+CMD ["python", "-m", "services.perception.src.detector"]
