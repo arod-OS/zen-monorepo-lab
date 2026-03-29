@@ -1,6 +1,6 @@
 # Multi-stage build for the perception service
 # Stage 1: Testing
-FROM python:3.11-slim AS Testing
+FROM python:3.11-slim AS testing
 
 WORKDIR /app
 COPY libs/data-utils /app/libs/data-utils
@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r services/perception/requirements.txt
 RUN python -m pytest services/perception/tests/ -v
 
 # Stage 2: Production
-FROM python:3.11-slim AS Production
+FROM python:3.11-slim AS production
 
 WORKDIR /app
 COPY --from=test /app/libs/data-utils /app/libs/data-utils
