@@ -210,7 +210,7 @@ jobs:
     name: "CI Summary"
     if: always()
     needs: [detect-changes, test-data-utils, test-perception, test-ml-training, docker-build]
-    runs-on ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
