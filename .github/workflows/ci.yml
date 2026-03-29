@@ -6,7 +6,7 @@ name: Monorepo CI
 on:
   push:
     branches: [main]
-  pull_requests:
+  pull_request:
     branches: [main]
 
 # Cancel in-progress runs for the same PR
